@@ -915,16 +915,11 @@ if numpy_version >= (1, 9):
 # Element-wise computations
 
 @register_jitable
-def _fill_diagonal(a, val, wrap):
-
+def _fill_diagonal_params(a, wrap):
     if a.ndim == 2:
         n = a.shape[1]
         step = n + 1
-
-        if wrap:
-            end = n * a.shape[0]
-        else:
-            end = n * n
+        end = n * a.shape[0] if wrap else n * n
     else:
         shape = np.array(a.shape)
 
@@ -934,11 +929,23 @@ def _fill_diagonal(a, val, wrap):
         step = 1 + (np.cumprod(shape[:-1])).sum()
         end = shape.prod()
 
+    return end, step
+
+@register_jitable
+def _fill_diagonal_scalar(a, val, wrap):
+    end, step = _fill_diagonal_params(a, wrap)
+
+    for i in range(0, end, step):
+        a.flat[i] = val
+
+@register_jitable
+def _fill_diagonal(a, val, wrap):
+    end, step = _fill_diagonal_params(a, wrap)
     ctr = 0
     v_len = len(val)
 
     for i in range(0, end, step):
-        a.flat[i] = val[ctr]
+        a.flat[i] = val.flat[ctr]
         ctr += 1
         ctr = ctr % v_len
 
@@ -949,8 +956,7 @@ def np_fill_diagonal(a, val, wrap=False):
         raise ValueError("array must be at least 2-d")
 
     def fill_diagonal_impl_scalar_val(a, val, wrap=False):
-        val = np.array([val])
-        _fill_diagonal(a, val, wrap)
+        _fill_diagonal_scalar(a, val, wrap)
 
     def fill_diagonal_impl_seq_val(a, val, wrap=False):
         val = np.array(val).flatten()
