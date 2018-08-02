@@ -438,12 +438,9 @@ class TestArrayReductions(MemoryLeakMixin, TestCase):
         pyfunc = array_nanmedian_global
         self.check_median_basic(pyfunc, self._array_variations)
 
-    def test_fill_diagonal(self):
-        self.fill_diagonal_basic()
-        self.fill_diagonal_exception_cases()
-
-    def fill_diagonal_basic(self):
+    def test_fill_diagonal_basic(self):
         pyfunc = fill_diagonal_global
+        cfunc = jit(nopython=True)(pyfunc)
 
         def _shape_variations(n):
             # square
@@ -461,21 +458,25 @@ class TestArrayReductions(MemoryLeakMixin, TestCase):
             yield 1
             yield 3.142
             yield np.nan
+            yield -np.inf
             yield True
-            yield (1, 2, 3)
-            yield np.arange(5)
-            yield np.arange(27).reshape(3, 3, 3)
 
         def _multi_dimensional_array_variations(n):
             for shape in _shape_variations(n):
                 yield np.zeros(shape, dtype=np.float64)
 
         for arr in _multi_dimensional_array_variations(3):
+            a = arr.copy()
+            b = arr.copy()
             for val in _val_variations():
-                cfunc = jit(nopython=True)(pyfunc)  # if you move this outside the loop, at least one CI build segfaults
-                self._check_fill_diagonal(arr, val, pyfunc, cfunc)
+                pyfunc(a, val)
+                cfunc(b, val)
+                self.assertPreciseEqual(a, b)
 
-    def _check_fill_diagonal(self, arr, val, pyfunc, cfunc):
+    def _check_fill_diagonal(self, arr, val):
+        pyfunc = fill_diagonal_global
+        cfunc = jit(nopython=True)(pyfunc)
+
         a = arr.copy()
         b = arr.copy()
         pyfunc(a, val)
@@ -490,7 +491,30 @@ class TestArrayReductions(MemoryLeakMixin, TestCase):
             cfunc(b, val, wrap=wrap)
             self.assertPreciseEqual(a, b)
 
-    def fill_diagonal_exception_cases(self):
+    def test_fill_diagonal_oddballs(self):
+
+        # some safe type coercions
+        arr = np.ones((3, 3), dtype=np.int32)
+        self._check_fill_diagonal(arr, 6)
+        self._check_fill_diagonal(arr, False)
+        self._check_fill_diagonal(arr, 6.1)
+
+        # ditto
+        arr = np.full((11, 3), fill_value=3.142, dtype=np.float32)
+        self._check_fill_diagonal(arr, 1.1)
+        self._check_fill_diagonal(arr, True)
+        self._check_fill_diagonal(arr, 6)
+
+        # a basic multi-dimensional case
+        arr = np.zeros((5, 5, 5))
+        self._check_fill_diagonal(arr, 9)
+
+        # a permitted, but unusual, multi-dimensional case
+        arr = np.zeros((1, 1, 1, 1))
+        self._check_fill_diagonal(arr, True)
+        self._check_fill_diagonal(arr, 5)
+
+    def test_fill_diagonal_exception_cases(self):
         pyfunc = fill_diagonal_global
         cfunc = jit(nopython=True)(pyfunc)
         val = 1
@@ -507,6 +531,92 @@ class TestArrayReductions(MemoryLeakMixin, TestCase):
             a = np.zeros((3, 3, 4))
             cfunc(a, val)
         self.assertEqual("All dimensions of input must be of equal length", str(raises.exception))
+
+    @unittest.skip('TODO: figure out how to handle type mismatch')
+    def test_fill_diagonal_edge_cases(self):
+        pyfunc = fill_diagonal_global
+        cfunc = jit(nopython=True)(pyfunc)
+
+        arr = np.zeros((3, 3), dtype=np.int32)
+        val = np.nan  # or pick a huge int; same outcome
+
+        with self.assertRaises(ValueError):
+            cfunc(arr, val)
+
+        # Note:
+        # this should raise but it doesn't as np.nan gets int-ified with no error
+        # (but with a nonsensical output).
+        #
+        # For example:
+        #
+        # @njit
+        # def _coerce_val(a, val):
+        #     retty = a.dtype.type
+        #     return retty(val)
+        #
+        # _coerce_val(np.array([], dtype=np.int32), np.nan) -> -2147483648
+
+    def test_fill_diagonal_oddballs_non_scalar_val_0(self):
+
+        # basic case - shape of val 'fits' diagonal
+        arr = np.ones((4, 4))
+        val = np.arange(1, 5)
+        self._check_fill_diagonal(arr, val)
+
+        # val is shorter than diagonal
+        arr = np.ones((7, 4))
+        val = np.arange(1, 3)
+        self._check_fill_diagonal(arr, val)
+
+        # val is longer than diagonal
+        arr = np.ones((4, 3))
+        val = np.arange(100)
+        self._check_fill_diagonal(arr, val)
+
+    def test_fill_diagonal_oddballs_non_scalar_val_1(self):
+
+        # weird cases where val is multi-dimensional
+        arr = np.ones((5, 5))
+        val = np.arange(1, 10).reshape(3, 3)
+        self._check_fill_diagonal(arr, val)
+
+        arr = np.ones((3, 5))
+        val = np.arange(16).reshape(2, 8)
+        self._check_fill_diagonal(arr, val)
+
+        arr = np.ones((4, 4))
+        val = np.arange(16).reshape(2, 4, 2)
+        self._check_fill_diagonal(arr, val)
+
+    def test_fill_diagonal_oddballs_non_scalar_val_2(self):
+
+        # val expressed in tuples
+        arr = np.ones((10, 5))
+        val = (1, 2, 3)
+        self._check_fill_diagonal(arr, val)
+
+        arr = np.ones((10, 5))
+        val = ((1, 2), (3, 4))
+        self._check_fill_diagonal(arr, val)
+
+        arr = np.ones((3, 5))
+        val = (8,)
+        self._check_fill_diagonal(arr, val)
+
+        arr = np.ones((5, 5, 5))
+        val = (True, False, True)
+        self._check_fill_diagonal(arr, val)
+
+    def test_fill_diagonal_oddballs_non_scalar_val_3(self):
+
+        # a smattering of multi-dimensional test cases
+        arr = np.ones((4, 4, 4))
+        val = np.arange(27).reshape(3, 3, 3)
+        self._check_fill_diagonal(arr, val)
+
+        arr = np.ones((5, 5, 5, 5, 5))
+        val = np.arange(100)
+        self._check_fill_diagonal(arr, val)
 
     def test_array_sum_global(self):
         arr = np.arange(10, dtype=np.int32)
