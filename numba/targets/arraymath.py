@@ -941,13 +941,21 @@ def _fill_diagonal_scalar(a, val, wrap):
 @register_jitable
 def _fill_diagonal(a, val, wrap):
     end, step = _fill_diagonal_params(a, wrap)
-    ctr = 0
+
+    n = 1 + end // step
+    diagonal_vals = np.empty(n, dtype=val.dtype)
     v_len = len(val)
 
+    for i in range(n):
+        idx = i % v_len
+        assert idx < v_len, 'OOB violation accessing val'
+        diagonal_vals[i] = val[idx]
+
+    ctr = 0
     for i in range(0, end, step):
-        a.flat[i] = val.flat[ctr]
+        assert ctr < n, 'OOB violation accessing diagonal_vals'
+        a.flat[i] = diagonal_vals[ctr]
         ctr += 1
-        ctr = ctr % v_len
 
 @overload(np.fill_diagonal)
 def np_fill_diagonal(a, val, wrap=False):
@@ -959,12 +967,13 @@ def np_fill_diagonal(a, val, wrap=False):
         _fill_diagonal_scalar(a, val, wrap)
 
     def fill_diagonal_impl_seq_val(a, val, wrap=False):
-        val = np.array(val).flatten()
-        _fill_diagonal(a, val, wrap)
+        val_ = np.array(val)
+        val_flat = val_.flatten()
+        _fill_diagonal(a, val_flat, wrap)
 
     def fill_diagonal_impl_array_val(a, val, wrap=False):
-        val = val.flatten()
-        _fill_diagonal(a, val, wrap)
+        val_flat = val.flatten()
+        _fill_diagonal(a, val_flat, wrap)
 
     if a.ndim < 2:
         return _abort_mission
